@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import json
 import psycopg2
 from pyflink.datastream import StreamExecutionEnvironment
@@ -14,81 +15,69 @@ PG_DB = "postgres"
 PG_USER = "postgres"
 PG_PASSWORD = "mysecretpassword"
 
-UPSERT_PET = """
-INSERT INTO dim_customer_pet (customer_pet_type, customer_pet_name, customer_pet_breed)
-VALUES (%s,%s,%s)
-ON CONFLICT (customer_pet_type, customer_pet_name, customer_pet_breed) DO NOTHING
-RETURNING customer_pet_id
-"""
 
-UPSERT_CUSTOMER = """
-INSERT INTO dim_customer (customer_first_name, customer_last_name, customer_age,
-                          customer_email, customer_country, customer_postal_code,
-                          customer_pet_id, pet_category)
-VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-ON CONFLICT (customer_first_name, customer_last_name, customer_email) DO UPDATE
-SET customer_age = EXCLUDED.customer_age,
-    customer_country = EXCLUDED.customer_country,
-    customer_postal_code = EXCLUDED.customer_postal_code,
-    customer_pet_id = EXCLUDED.customer_pet_id,
-    pet_category = EXCLUDED.pet_category
-RETURNING sale_customer_id
-"""
+def generate_upsert_sql(table, columns, conflict, update, returning):
+    placeholders = ','.join(['%s'] * len(columns))
+    conflict_str = ','.join(conflict)
+    update_str = ','.join([f'{col}=EXCLUDED.{col}' for col in update])
+    return f"""
+        INSERT INTO {table} ({','.join(columns)})
+        VALUES ({placeholders})
+        ON CONFLICT ({conflict_str}) DO UPDATE SET {update_str}
+        RETURNING {returning}
+    """
 
-UPSERT_SELLER = """
-INSERT INTO dim_seller (seller_first_name, seller_last_name, seller_email,
-                        seller_country, seller_postal_code)
-VALUES (%s,%s,%s,%s,%s)
-ON CONFLICT (seller_first_name, seller_last_name, seller_email) DO UPDATE
-SET seller_country = EXCLUDED.seller_country,
-    seller_postal_code = EXCLUDED.seller_postal_code
-RETURNING sale_seller_id
-"""
 
-UPSERT_SUPPLIER = """
-INSERT INTO dim_supplier (supplier_name, supplier_contact, supplier_email, supplier_phone,
-                          supplier_address, supplier_city, supplier_country)
-VALUES (%s,%s,%s,%s,%s,%s,%s)
-ON CONFLICT (supplier_name, supplier_email) DO UPDATE
-SET supplier_contact = EXCLUDED.supplier_contact,
-    supplier_phone = EXCLUDED.supplier_phone,
-    supplier_address = EXCLUDED.supplier_address,
-    supplier_city = EXCLUDED.supplier_city,
-    supplier_country = EXCLUDED.supplier_country
-RETURNING product_supplier_id
-"""
+TABLE_CONFIGS = {
+    'dim_customer_pet': {
+        'columns': ['customer_pet_type', 'customer_pet_name', 'customer_pet_breed'],
+        'conflict': ['customer_pet_type', 'customer_pet_name', 'customer_pet_breed'],
+        'update': ['customer_pet_type', 'customer_pet_name', 'customer_pet_breed'],  # обновляем те же (по сути no-op)
+        'returning': 'customer_pet_id'
+    },
+    'dim_customer': {
+        'columns': ['customer_first_name', 'customer_last_name', 'customer_age',
+                    'customer_email', 'customer_country', 'customer_postal_code',
+                    'customer_pet_id', 'pet_category'],
+        'conflict': ['customer_first_name', 'customer_last_name', 'customer_email'],
+        'update': ['customer_age', 'customer_country', 'customer_postal_code', 'customer_pet_id', 'pet_category'],
+        'returning': 'sale_customer_id'
+    },
+    'dim_seller': {
+        'columns': ['seller_first_name', 'seller_last_name', 'seller_email', 'seller_country', 'seller_postal_code'],
+        'conflict': ['seller_first_name', 'seller_last_name', 'seller_email'],
+        'update': ['seller_country', 'seller_postal_code'],
+        'returning': 'sale_seller_id'
+    },
+    'dim_supplier': {
+        'columns': ['supplier_name', 'supplier_contact', 'supplier_email', 'supplier_phone',
+                    'supplier_address', 'supplier_city', 'supplier_country'],
+        'conflict': ['supplier_name', 'supplier_email'],
+        'update': ['supplier_contact', 'supplier_phone', 'supplier_address', 'supplier_city', 'supplier_country'],
+        'returning': 'product_supplier_id'
+    },
+    'dim_product': {
+        'columns': ['product_supplier_id', 'product_name', 'product_category',
+                    'product_price', 'product_quantity', 'product_weight', 'product_color',
+                    'product_size', 'product_brand', 'product_material', 'product_description',
+                    'product_rating', 'product_reviews', 'product_release_date', 'product_expiry_date'],
+        'conflict': ['product_name', 'product_price', 'product_brand', 'product_color', 'product_size',
+                     'product_material', 'product_supplier_id'],
+        'update': ['product_category', 'product_quantity', 'product_weight', 'product_description',
+                   'product_rating', 'product_reviews', 'product_release_date', 'product_expiry_date'],
+        'returning': 'sale_product_id'
+    },
+    'dim_store': {
+        'columns': ['store_name', 'store_location', 'store_city', 'store_state',
+                    'store_country', 'store_phone', 'store_email'],
+        'conflict': ['store_email'],
+        'update': ['store_name', 'store_location', 'store_city', 'store_state', 'store_country', 'store_phone'],
+        'returning': 'sale_store_id'
+    }
+}
 
-UPSERT_PRODUCT = """
-INSERT INTO dim_product (product_supplier_id, product_name, product_category,
-                         product_price, product_quantity, product_weight, product_color,
-                         product_size, product_brand, product_material, product_description,
-                         product_rating, product_reviews, product_release_date, product_expiry_date)
-VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-ON CONFLICT (product_name, product_price, product_brand, product_color, product_size, product_material, product_supplier_id) DO UPDATE
-SET product_category = EXCLUDED.product_category,
-    product_quantity = EXCLUDED.product_quantity,
-    product_weight = EXCLUDED.product_weight,
-    product_description = EXCLUDED.product_description,
-    product_rating = EXCLUDED.product_rating,
-    product_reviews = EXCLUDED.product_reviews,
-    product_release_date = EXCLUDED.product_release_date,
-    product_expiry_date = EXCLUDED.product_expiry_date
-RETURNING sale_product_id
-"""
-
-UPSERT_STORE = """
-INSERT INTO dim_store (store_name, store_location, store_city, store_state,
-                       store_country, store_phone, store_email)
-VALUES (%s,%s,%s,%s,%s,%s,%s)
-ON CONFLICT (store_email) DO UPDATE
-SET store_name = EXCLUDED.store_name,
-    store_location = EXCLUDED.store_location,
-    store_city = EXCLUDED.store_city,
-    store_state = EXCLUDED.store_state,
-    store_country = EXCLUDED.store_country,
-    store_phone = EXCLUDED.store_phone
-RETURNING sale_store_id
-"""
+# Заранее генерируем SQL для каждой таблицы
+UPSERT_SQL = {table: generate_upsert_sql(table, **cfg) for table, cfg in TABLE_CONFIGS.items()}
 
 INSERT_FACT = """
 INSERT INTO fact_sales (sale_product_id, sale_seller_id, sale_customer_id, sale_store_id,
@@ -122,13 +111,13 @@ class StarSchemaMapper(MapFunction):
             return
 
         # 1. pet
-        pet_id = _get_one(self.conn, UPSERT_PET,
+        pet_id = _get_one(self.conn, UPSERT_SQL['dim_customer_pet'],
                           (rec.get("customer_pet_type"),
                            rec.get("customer_pet_name"),
                            rec.get("customer_pet_breed")))
 
         # 2. customer
-        cust_id = _get_one(self.conn, UPSERT_CUSTOMER,
+        cust_id = _get_one(self.conn, UPSERT_SQL['dim_customer'],
                            (rec.get("customer_first_name"),
                             rec.get("customer_last_name"),
                             int(rec["customer_age"]) if rec.get("customer_age") else None,
@@ -139,7 +128,7 @@ class StarSchemaMapper(MapFunction):
                             rec.get("pet_category")))
 
         # 3. seller
-        seller_id = _get_one(self.conn, UPSERT_SELLER,
+        seller_id = _get_one(self.conn, UPSERT_SQL['dim_seller'],
                              (rec.get("seller_first_name"),
                               rec.get("seller_last_name"),
                               rec.get("seller_email"),
@@ -147,7 +136,7 @@ class StarSchemaMapper(MapFunction):
                               rec.get("seller_postal_code")))
 
         # 4. supplier
-        supp_id = _get_one(self.conn, UPSERT_SUPPLIER,
+        supp_id = _get_one(self.conn, UPSERT_SQL['dim_supplier'],
                            (rec.get("supplier_name"),
                             rec.get("supplier_contact"),
                             rec.get("supplier_email"),
@@ -157,7 +146,7 @@ class StarSchemaMapper(MapFunction):
                             rec.get("supplier_country")))
 
         # 5. product
-        prod_id = _get_one(self.conn, UPSERT_PRODUCT,
+        prod_id = _get_one(self.conn, UPSERT_SQL['dim_product'],
                            (supp_id,
                             rec.get("product_name"),
                             rec.get("product_category"),
@@ -175,7 +164,7 @@ class StarSchemaMapper(MapFunction):
                             rec.get("product_expiry_date")))
 
         # 6. store
-        store_id = _get_one(self.conn, UPSERT_STORE,
+        store_id = _get_one(self.conn, UPSERT_SQL['dim_store'],
                             (rec.get("store_name"),
                              rec.get("store_location"),
                              rec.get("store_city"),
