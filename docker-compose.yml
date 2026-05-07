@@ -57,13 +57,16 @@ services:
       container_name: flink-jobmanager
       ports:
         - "8081:8081"
+      build:
+        context: .
+        dockerfile: Dockerfile.flink 
       command: jobmanager
       environment:
         - JOB_MANAGER_RPC_ADDRESS=flink-jobmanager
         # Добавляем папку с дополнительными JAR-файлами в classpath
         - CLASSPATH=/opt/flink/extra-jars/*
       volumes:
-        - ./flink-jobs:/opt/flink/usrlib
+       # - ./flink-jobs:/opt/flink/usrlib
         - ./jars:/opt/flink/extra-jars   # монтируем в отдельную папку
       networks:
         - data-network

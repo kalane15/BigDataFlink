@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 import json
 import psycopg2
 from pyflink.datastream import StreamExecutionEnvironment
@@ -9,14 +8,12 @@ from pyflink.datastream.functions import MapFunction, RuntimeContext
 KAFKA_BOOTSTRAP = "kafka:9092"
 KAFKA_TOPIC = "csv-data"
 
-# PostgreSQL connection settings
 PG_HOST = "postgres"
 PG_PORT = 5432
 PG_DB = "postgres"
 PG_USER = "postgres"
 PG_PASSWORD = "mysecretpassword"
 
-# ---- SQL templates for upsert (dimensions) ----
 UPSERT_PET = """
 INSERT INTO dim_customer_pet (customer_pet_type, customer_pet_name, customer_pet_breed)
 VALUES (%s,%s,%s)
@@ -25,10 +22,10 @@ RETURNING customer_pet_id
 """
 
 UPSERT_CUSTOMER = """
-INSERT INTO dim_customer (sale_customer_id, customer_first_name, customer_last_name, customer_age,
+INSERT INTO dim_customer (customer_first_name, customer_last_name, customer_age,
                           customer_email, customer_country, customer_postal_code,
                           customer_pet_id, pet_category)
-VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
 ON CONFLICT (customer_first_name, customer_last_name, customer_email) DO UPDATE
 SET customer_age = EXCLUDED.customer_age,
     customer_country = EXCLUDED.customer_country,
@@ -39,9 +36,9 @@ RETURNING sale_customer_id
 """
 
 UPSERT_SELLER = """
-INSERT INTO dim_seller (sale_seller_id, seller_first_name, seller_last_name, seller_email,
+INSERT INTO dim_seller (seller_first_name, seller_last_name, seller_email,
                         seller_country, seller_postal_code)
-VALUES (%s,%s,%s,%s,%s,%s)
+VALUES (%s,%s,%s,%s,%s)
 ON CONFLICT (seller_first_name, seller_last_name, seller_email) DO UPDATE
 SET seller_country = EXCLUDED.seller_country,
     seller_postal_code = EXCLUDED.seller_postal_code
@@ -62,11 +59,11 @@ RETURNING product_supplier_id
 """
 
 UPSERT_PRODUCT = """
-INSERT INTO dim_product (sale_product_id, product_supplier_id, product_name, product_category,
+INSERT INTO dim_product (product_supplier_id, product_name, product_category,
                          product_price, product_quantity, product_weight, product_color,
                          product_size, product_brand, product_material, product_description,
                          product_rating, product_reviews, product_release_date, product_expiry_date)
-VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
 ON CONFLICT (product_name, product_price, product_brand, product_color, product_size, product_material, product_supplier_id) DO UPDATE
 SET product_category = EXCLUDED.product_category,
     product_quantity = EXCLUDED.product_quantity,
@@ -99,6 +96,7 @@ INSERT INTO fact_sales (sale_product_id, sale_seller_id, sale_customer_id, sale_
 VALUES (%s,%s,%s,%s,%s,%s,%s)
 """
 
+
 def _get_one(conn, sql, params):
     with conn.cursor() as cur:
         cur.execute(sql, params)
@@ -106,10 +104,11 @@ def _get_one(conn, sql, params):
         conn.commit()
         return row[0] if row else None
 
+
 class StarSchemaMapper(MapFunction):
     def open(self, ctx: RuntimeContext):
         self.conn = psycopg2.connect(host=PG_HOST, port=PG_PORT, dbname=PG_DB,
-                                      user=PG_USER, password=PG_PASSWORD)
+                                     user=PG_USER, password=PG_PASSWORD)
 
     def close(self):
         if self.conn:
@@ -118,7 +117,8 @@ class StarSchemaMapper(MapFunction):
     def map(self, value: str):
         try:
             rec = json.loads(value)
-        except:
+        except Exception as e:
+            print(f"JSON parse error: {e}")
             return
 
         # 1. pet
@@ -126,10 +126,10 @@ class StarSchemaMapper(MapFunction):
                           (rec.get("customer_pet_type"),
                            rec.get("customer_pet_name"),
                            rec.get("customer_pet_breed")))
+
         # 2. customer
         cust_id = _get_one(self.conn, UPSERT_CUSTOMER,
-                           (rec.get("sale_customer_id"),
-                            rec.get("customer_first_name"),
+                           (rec.get("customer_first_name"),
                             rec.get("customer_last_name"),
                             int(rec["customer_age"]) if rec.get("customer_age") else None,
                             rec.get("customer_email"),
@@ -137,14 +137,15 @@ class StarSchemaMapper(MapFunction):
                             rec.get("customer_postal_code"),
                             pet_id,
                             rec.get("pet_category")))
+
         # 3. seller
         seller_id = _get_one(self.conn, UPSERT_SELLER,
-                             (rec.get("sale_seller_id"),
-                              rec.get("seller_first_name"),
+                             (rec.get("seller_first_name"),
                               rec.get("seller_last_name"),
                               rec.get("seller_email"),
                               rec.get("seller_country"),
                               rec.get("seller_postal_code")))
+
         # 4. supplier
         supp_id = _get_one(self.conn, UPSERT_SUPPLIER,
                            (rec.get("supplier_name"),
@@ -154,10 +155,10 @@ class StarSchemaMapper(MapFunction):
                             rec.get("supplier_address"),
                             rec.get("supplier_city"),
                             rec.get("supplier_country")))
+
         # 5. product
         prod_id = _get_one(self.conn, UPSERT_PRODUCT,
-                           (rec.get("sale_product_id"),
-                            supp_id,
+                           (supp_id,
                             rec.get("product_name"),
                             rec.get("product_category"),
                             float(rec["product_price"]) if rec.get("product_price") else None,
@@ -172,6 +173,7 @@ class StarSchemaMapper(MapFunction):
                             int(rec["product_reviews"]) if rec.get("product_reviews") else None,
                             rec.get("product_release_date"),
                             rec.get("product_expiry_date")))
+
         # 6. store
         store_id = _get_one(self.conn, UPSERT_STORE,
                             (rec.get("store_name"),
@@ -195,14 +197,16 @@ class StarSchemaMapper(MapFunction):
         else:
             print(f"Missing dimension, skip fact: prod={prod_id}, seller={seller_id}, cust={cust_id}, store={store_id}")
 
+
 def main():
     env = StreamExecutionEnvironment.get_execution_environment()
     env.set_parallelism(1)
 
-    # Register JARs (adjust paths if needed)
-    env.add_jars("file:///opt/flink/lib/flink-connector-jdbc-3.1.2-1.18.jar",
-                 "file:///opt/flink/lib/postgresql-42.7.3.jar",
-                 "file:///opt/flink/lib/flink-sql-connector-kafka-3.0.2-1.18.jar")
+    env.add_jars(
+        "file:///opt/flink/extra-jars/flink-sql-connector-kafka-3.0.2-1.18.jar",
+        "file:///opt/flink/extra-jars/postgresql-42.7.3.jar",
+        "file:///opt/flink/extra-jars/flink-connector-jdbc-3.1.2-1.18.jar"
+    )
 
     kafka_props = {
         "bootstrap.servers": KAFKA_BOOTSTRAP,
@@ -215,6 +219,7 @@ def main():
     stream.map(StarSchemaMapper())
 
     env.execute("Star Schema Streaming")
+
 
 if __name__ == "__main__":
     main()
