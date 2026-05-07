@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 import json
 import psycopg2
 from pyflink.datastream import StreamExecutionEnvironment
@@ -76,7 +75,6 @@ TABLE_CONFIGS = {
     }
 }
 
-# Заранее генерируем SQL для каждой таблицы
 UPSERT_SQL = {table: generate_upsert_sql(table, **cfg) for table, cfg in TABLE_CONFIGS.items()}
 
 INSERT_FACT = """
