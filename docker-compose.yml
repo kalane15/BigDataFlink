@@ -19,34 +19,28 @@ services:
   kafka:
     image: confluentinc/cp-kafka:latest
     container_name: kafka
-    # ZooKeeper больше не нужен - убираем depends_on
     environment:
-      # Основные настройки KRaft
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
       KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:9093"
       
-      # Настройки слушателей
       KAFKA_LISTENERS: "PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093"
       KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:9092"
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT"
       KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
       
-      # Логи и данные
       KAFKA_LOG_DIRS: "/var/lib/kafka/data"
       
-      # Настройки топиков
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       
-      # Дополнительные настройки для разработки
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
       KAFKA_NUM_PARTITIONS: 3
       
     ports:
-      - "9092:9092"  # Kafka broker порт
-      - "9093:9093"  # KRaft controller порт
+      - "9092:9092"
+      - "9093:9093"
     volumes:
       - kafka-data:/var/lib/kafka/data
     networks:
@@ -63,11 +57,9 @@ services:
       command: jobmanager
       environment:
         - JOB_MANAGER_RPC_ADDRESS=flink-jobmanager
-        # Добавляем папку с дополнительными JAR-файлами в classpath
         - CLASSPATH=/opt/flink/extra-jars/*
       volumes:
-       # - ./flink-jobs:/opt/flink/usrlib
-        - ./jars:/opt/flink/extra-jars   # монтируем в отдельную папку
+        - ./jars:/opt/flink/extra-jars
       networks:
         - data-network
 
